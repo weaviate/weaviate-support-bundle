@@ -1,0 +1,4 @@
+loguru
+python-dotenv
+kubernetes
+weaviate-client
