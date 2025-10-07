@@ -6,11 +6,12 @@ import json
 import os
 from loguru import logger
 from datetime import datetime
+from dotenv import load_dotenv
 
-
+load_dotenv()
 
 def get_complete_release_info(release_name, namespace="default"):
-
+    print(release_name, namespace)
     try:
         config.load_kube_config()
         v1 = client.CoreV1Api()
@@ -134,6 +135,7 @@ def get_previous_revisions(release_name, namespace):
 if __name__ == "__main__":
   release_name = os.getenv("RELEASE_NAME", "weaviate")
   namespace = os.getenv("NAMESPACE", "weaviate")
+  print("HERE", release_name, namespace)
 
   release_info = get_complete_release_info(release_name, namespace)
   #logger.info(type(release_info)) # type is dict
