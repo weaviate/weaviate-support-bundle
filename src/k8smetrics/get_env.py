@@ -15,7 +15,8 @@ load_dotenv()
 
 NAMESPACE = os.getenv("NAMESPACE", "weaviate")
 STATEFULSET_NAME = os.getenv("STATEFULSET_NAME", "weaviate")
-
+if not STATEFULSET_NAME:
+    STATEFULSET_NAME = "weaviate"
 
 try:
     config.load_kube_config()
@@ -28,20 +29,26 @@ apps_v1 = client.AppsV1Api()
 
 
 def get_statefulset_resource_details(namespace: str, statefulset_name: str) -> Dict[str, Any]:
-
     try:
         statefulset = apps_v1.read_namespaced_stateful_set(statefulset_name, namespace)
         #logger.info(statefulset.spec.template.spec.containers)
-        container = statefulset.spec.template.spec.containers[0]
-        resources = container.resources or client.V1ResourceRequirements()
-        env_vars = {env.name: env.value for env in (container.env or []) if env.value is not None}
-        env_from = container.env_from or []
+        env_from = []
+        resources_requests = {}
+        resources_limits = {}
+        env_vars = {}
+        if statefulset.spec:
+            container = statefulset.spec.template.spec.containers[0]
+            resources = container.resources or client.V1ResourceRequirements()
+            env_vars = {env.name: env.value for env in (container.env or []) if env.value is not None}
+            resources_requests = dict(resources.requests or {})
+            resources_limits = dict(resources.limits or {})
+            env_from = container.env_from
 
         details = {
             "namespace": namespace,
             "statefulset": statefulset_name,
-            "requests": dict(resources.requests or {}),
-            "limits": dict(resources.limits or {}),
+            "requests": resources_requests,
+            "limits": resources_limits,
             "env_vars": env_vars,
             "env_from": f"Env From (ConfigMaps/Secrets): {env_from}"
         }
