@@ -36,6 +36,8 @@ JQ_LIB="$LIB_DIR/jq"
 . "$LIB_DIR/disk.sh"
 # shellcheck source=lib/helm.sh
 . "$LIB_DIR/helm.sh"
+# shellcheck source=lib/profile.sh
+. "$LIB_DIR/profile.sh"
 # shellcheck source=lib/summary.sh
 . "$LIB_DIR/summary.sh"
 # shellcheck source=lib/finalize.sh
@@ -79,6 +81,13 @@ Logs
       --to TIME              Logs until TIME (UTC). Use with --from.
       --max-log-mb N         Size cap per container log in MB (default: 100)
 
+Profiling (off by default)
+      --profile              Also capture Go profiles from each Weaviate pod, one pod at a time:
+                             heap, allocs, mutex, goroutine, goroutine dump, then CPU and fgprof.
+                             Needs DEBUG_ENDPOINTS_ENABLED=true in Weaviate. Adds CPU load while
+                             it runs.
+      --profile-duration N   Seconds for the CPU and for the fgprof profile, each (default: 30)
+
 Privacy
       --anonymize            Replace tenant names and user names with placeholders
                              (the mapping stays on your machine)
@@ -96,6 +105,7 @@ Examples:
   ./collect.sh -n weaviate --since 6h
   ./collect.sh -n weaviate --pods weaviate-1,weaviate-2 --only logs
   ./collect.sh -n weaviate --from 2026-11-01T08:00 --to 2026-11-01T12:00
+  ./collect.sh -n weaviate --profile
   WEAVIATE_API_KEY=... ./collect.sh -n weaviate --weaviate-url https://weaviate.example.com
 EOF
 }
@@ -127,6 +137,7 @@ parse_args() {
   LOG_SINCE="24h"; LOG_FROM=""; LOG_TO=""; MAX_LOG_MB=100
   ONLY_SECTIONS=""; SKIP_SECTIONS=""; INCLUDE_HELM=0; HELM_RELEASE=""; ANONYMIZE=0
   METRICS_INTERVAL=30; OUTPUT_DIR="."; ASSUME_YES=0; PREFLIGHT_ONLY=0
+  PROFILE=0; PROFILE_DURATION=30
   local since_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -145,6 +156,8 @@ parse_args() {
       --include-helm)       INCLUDE_HELM=1; shift ;;
       --helm-release)       need_value "$1" "${2:-}"; HELM_RELEASE="$2"; INCLUDE_HELM=1; shift 2 ;;
       --anonymize)          ANONYMIZE=1; shift ;;
+      --profile)            PROFILE=1; shift ;;
+      --profile-duration)   need_value "$1" "${2:-}"; PROFILE_DURATION="$2"; PROFILE=1; shift 2 ;;
       --metrics-interval)   need_value "$1" "${2:-}"; METRICS_INTERVAL="$2"; shift 2 ;;
       -o|--output)          need_value "$1" "${2:-}"; OUTPUT_DIR="$2"; shift 2 ;;
       --preflight-only)     PREFLIGHT_ONLY=1; shift ;;
@@ -176,6 +189,8 @@ parse_args() {
   printf '%s' "$METRICS_INTERVAL" | grep -Eq '^[0-9]+$' && [ "$METRICS_INTERVAL" -ge 5 ] && [ "$METRICS_INTERVAL" -le 600 ] \
     || die "--metrics-interval must be a number of seconds between 5 and 600."
   printf '%s' "$MAX_LOG_MB" | grep -Eq '^[0-9]+$' && [ "$MAX_LOG_MB" -ge 1 ] || die "--max-log-mb must be a positive number."
+  printf '%s' "$PROFILE_DURATION" | grep -Eq '^[0-9]+$' && [ "$PROFILE_DURATION" -ge 5 ] && [ "$PROFILE_DURATION" -le 300 ] \
+    || die "--profile-duration must be a number of seconds between 5 and 300."
 
   if [ -n "$WEAVIATE_URL" ]; then
     case "$WEAVIATE_URL" in http://*|https://*) ;; *) die "--weaviate-url must start with http:// or https://" ;; esac
@@ -206,6 +221,7 @@ main() {
   info "Checking what this account can read..."
   probe_permissions
   connect_weaviate
+  probe_profiling
 
   # Secrets we already know, so they are scrubbed from every file.
   jq -L "$JQ_LIB" -r 'include "redact"; env_secret_values[]' "$RAW/statefulset.json" >> "$WORK/secret-values" 2>/dev/null
@@ -226,6 +242,7 @@ main() {
   collect_pod_probes
   section_enabled logs && collect_logs
   section_enabled disk && collect_disk_usage
+  [ "$PROFILE" = 1 ] && collect_profiles
   [ "$INCLUDE_HELM" = 1 ] && collect_helm
   tunnel_close "${API_TUNNEL_PID:-}"
 

@@ -12,6 +12,8 @@
 #                         not create or change anything in the cluster)
 #   http_get <url> <out>  HTTP GET only, never another method, never the
 #                         Weaviate debug port
+#   http_get_profile ...  HTTP GET of an allow-listed profiling path on the
+#                         debug port, through a local tunnel only (--profile)
 #
 # If anything tries to do more, the tool stops before running it.
 
@@ -156,4 +158,43 @@ http_get() {
         --request GET --max-time "${HTTP_TIMEOUT:-60}" --connect-timeout 10 \
         --max-filesize 1073741824 $tls_flag --config - \
         --output "$out" --write-out '%{http_code}' "$url" 2>> "$WORK/run.log"
+}
+
+# ---------------------------------------------------------------------------
+# Profiling (only with --profile)
+#
+# Weaviate's debug port also serves endpoints that change state, so only
+# these profiling GETs are allowed on it, and only through a local tunnel.
+# They are the same profiles Weaviate support captures with its own tools.
+# ---------------------------------------------------------------------------
+_profile_path_allowed() {
+  case "$1" in
+    /debug/pprof/) ;;                                    # index, used as a probe
+    /debug/pprof/heap|/debug/pprof/allocs|/debug/pprof/mutex|/debug/pprof/goroutine) ;;
+    '/debug/pprof/goroutine?debug=2') ;;                 # goroutine text dump
+    '/debug/pprof/profile?seconds='[1-9]|'/debug/pprof/profile?seconds='[1-9][0-9]|'/debug/pprof/profile?seconds='[1-9][0-9][0-9]) ;;
+    '/debug/fgprof?seconds='[1-9]'&ignore=gopark&ignore=GoWrapper') ;;
+    '/debug/fgprof?seconds='[1-9][0-9]'&ignore=gopark&ignore=GoWrapper') ;;
+    '/debug/fgprof?seconds='[1-9][0-9][0-9]'&ignore=gopark&ignore=GoWrapper') ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+# http_get_profile <base> <path> <outfile> <max-seconds>
+#   <base> must be a local tunnel (http://127.0.0.1:<port>). GET only, no
+#   credentials (the debug port has no authentication). Prints the HTTP status.
+http_get_profile() {
+  local base="$1" path="$2" out="$3" max="${4:-60}"
+  case "$base" in
+    http://127.0.0.1:[0-9]|http://127.0.0.1:[0-9][0-9]|http://127.0.0.1:[0-9][0-9][0-9]) ;;
+    http://127.0.0.1:[0-9][0-9][0-9][0-9]|http://127.0.0.1:[0-9][0-9][0-9][0-9][0-9]) ;;
+    *) guard_violation "profiling only through a local tunnel: $base" ;;
+  esac
+  _profile_path_allowed "$path" || guard_violation "debug port path not allowed: $path"
+  case "$max" in ''|*[!0-9]*) guard_violation "bad profiling timeout: $max" ;; esac
+  command curl --silent --show-error --globoff --proto '=http' \
+    --request GET --max-time "$max" --connect-timeout 10 \
+    --max-filesize 4294967296 \
+    --output "$out" --write-out '%{http_code}' "$base$path" 2>> "$WORK/run.log" < /dev/null
 }

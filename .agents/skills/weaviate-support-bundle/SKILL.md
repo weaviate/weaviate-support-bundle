@@ -70,6 +70,9 @@ Paths to `scripts/` and `references/` are relative to this skill's folder.
      user names.
    - `--weaviate-url URL` when they give an address to use instead of a
      port-forward.
+   - `--profile` only when they say Weaviate support asked for profiles, or
+     they ask for them. It adds CPU load for about a minute per pod; say so
+     before you ask.
    - `./collect.sh --help` lists every option. Do not invent options.
 4. **Preflight:** in the tool folder, run `./collect.sh --preflight-only` with
    those options. Show the table as printed. For each row marked ✘, add one

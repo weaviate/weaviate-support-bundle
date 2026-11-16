@@ -53,16 +53,25 @@ for f in $files; do
   fi
 done
 
-# The only curl call (http_get in lib/guard.sh) must be GET with no body.
-curl_body=$(awk '/^http_get\(\) \{/,/^\}/' lib/guard.sh)
-if ! printf '%s' "$curl_body" | grep -q -- '--request GET'; then
-  echo "FAIL: http_get in lib/guard.sh must call curl with --request GET"
-  fail=1
-fi
-bad=$(printf '%s\n' "$curl_body" | grep -nE -- '(-X|--request)[[:space:]]+(POST|PUT|PATCH|DELETE)|--data|--upload-file|--form|--json|[[:space:]]-d[[:space:]]|[[:space:]]-T[[:space:]]|[[:space:]]-F[[:space:]]')
-if [ -n "$bad" ]; then
-  echo "FAIL: http_get has an HTTP write option:"
-  echo "$bad" | sed 's/^/    /'
+# The only curl calls (http_get and http_get_profile in lib/guard.sh) must be
+# GET with no body.
+for fn in http_get http_get_profile; do
+  curl_body=$(awk "/^$fn\\(\\) \\{/,/^\\}/" lib/guard.sh)
+  if ! printf '%s' "$curl_body" | grep -q -- '--request GET'; then
+    echo "FAIL: $fn in lib/guard.sh must call curl with --request GET"
+    fail=1
+  fi
+  bad=$(printf '%s\n' "$curl_body" | grep -nE -- '(-X|--request)[[:space:]]+(POST|PUT|PATCH|DELETE)|--data|--upload-file|--form|--json|[[:space:]]-d[[:space:]]|[[:space:]]-T[[:space:]]|[[:space:]]-F[[:space:]]')
+  if [ -n "$bad" ]; then
+    echo "FAIL: $fn has an HTTP write option:"
+    echo "$bad" | sed 's/^/    /'
+    fail=1
+  fi
+done
+# Every curl in guard.sh must be inside one of those two functions.
+n=$(code_only lib/guard.sh | grep -cE '(^|[[:space:]])command[[:space:]]+curl([[:space:]]|$)')
+if [ "$n" -ne 2 ]; then
+  echo "FAIL: lib/guard.sh runs curl $n times; only http_get and http_get_profile may run it"
   fail=1
 fi
 

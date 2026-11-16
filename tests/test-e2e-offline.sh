@@ -13,7 +13,7 @@ command -v python3 >/dev/null || { echo "skip: python3 not installed"; exit 0; }
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/wsb-e2e.XXXXXX")
 PORT=$((20000 + RANDOM % 20000))
-python3 tests/fake/weaviate_server.py "$PORT" "$T/http-violations" &
+FAKE_DEBUG_LOG="$T/debug-calls" python3 tests/fake/weaviate_server.py "$PORT" "$T/http-violations" &
 SERVER=$!
 cleanup() { kill "$SERVER" 2>/dev/null; pkill -f "$T/bin/kubectl port-forward" 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT
@@ -22,7 +22,7 @@ sleep 1
 mkdir -p "$T/bin" "$T/out" "$T/tmp"
 ln -s "$PWD/tests/fake/kubectl" "$T/bin/kubectl"
 export PATH="$T/bin:$PATH" FAKE_CALLS="$T/kubectl-calls" FAKE_WEAVIATE_PORT="$PORT"
-export WEAVIATE_API_KEY="e2e-fixture-apikey-9001" TMPDIR="$T/tmp/"
+export WEAVIATE_API_KEY="e2e-fixture-apikey-9001" TMPDIR="$T/tmp/" FAKE_DEBUG_LOG="$T/debug-calls"
 
 fail=0
 pass() { echo "ok: $1"; }
@@ -99,6 +99,59 @@ if [ -n "$B3" ]; then
 else
   bad "outage run produced no bundle"; tail -20 "$T/stderr3"
 fi
+
+# Without --profile, the debug port is never touched
+[ ! -s "$T/debug-calls" ] && pass "no debug-port call without --profile" || bad "debug port called without --profile: $(sort -u "$T/debug-calls" | head -3)"
+
+# --profile: same profiles and order as support's profiling tools, one pod at a time
+: > "$T/debug-calls"
+./collect.sh --yes --profile --profile-duration 5 --only weaviate --output "$T/out9" > /dev/null 2> "$T/stderr9"
+B9=$(ls -d "$T"/out9/weaviate-support-bundle-*/ 2>/dev/null | head -1)
+if [ -n "$B9" ]; then
+  okp=1
+  for pod in weaviate-0 weaviate-1 weaviate-2; do
+    for f in heap.pb.gz allocs.pb.gz mutex.pb.gz goroutine.pb.gz cpu.pb.gz fgprof.pb.gz; do
+      gzip -t "$B9/pods/$pod/profiles/$f" 2>/dev/null || { okp=0; echo "  missing or broken: $pod/profiles/$f"; }
+    done
+    [ -s "$B9/pods/$pod/profiles/goroutine_dump.txt" ] || { okp=0; echo "  missing: $pod/profiles/goroutine_dump.txt"; }
+  done
+  [ "$okp" = 1 ] && pass "--profile: 6 profiles + goroutine dump per Weaviate pod" || bad "--profile files"
+  order=$(grep -v '^/debug/pprof/$' "$T/debug-calls" | sed 's/?seconds=5.*//; s/^\/debug\/pprof\///; s/^\/debug\///' | tr '\n' ' ')
+  want="heap allocs mutex goroutine goroutine?debug=2 profile fgprof "
+  [ "$order" = "$want$want$want" ] && pass "--profile: per pod heap, allocs, mutex, goroutine, dump, then cpu, then fgprof" \
+    || bad "--profile order: $order"
+  grep -q 'fgprof?seconds=5&ignore=gopark&ignore=GoWrapper$' "$T/debug-calls" && pass "--profile: fgprof with the same parameters as support's tools" || bad "fgprof parameters"
+  jq -e '.run.profile == true and .run.profile_duration_seconds == 5 and ([.steps[] | select(.section == "profile" and .status == "ok")] | length) == 3' "$B9/manifest.json" > /dev/null \
+    && pass "--profile recorded in manifest" || bad "--profile not in manifest"
+  jq -e '[.steps[] | select(.section == "profile") | .detail] | all(. == "heap, allocs, mutex, goroutine, goroutine dump, cpu, fgprof")' "$B9/manifest.json" > /dev/null \
+    && pass "--profile step detail lists what was captured" || bad "--profile step detail: $(jq -c '[.steps[] | select(.section == "profile") | .detail]' "$B9/manifest.json")"
+  jq -e '[.files[].path | select(test("/profiles/"))] | length == 21' "$B9/manifest.json" > /dev/null && pass "profiles listed in manifest files" || bad "profiles not in manifest files"
+  grep -q 'Profiling' "$T/stderr9" && pass "--profile shown on the preflight" || bad "--profile not on the preflight"
+else
+  bad "--profile run produced no bundle"; tail -20 "$T/stderr9"
+fi
+
+# --profile while Weaviate has DEBUG_ENDPOINTS_ENABLED=false: skipped with a clear reason, rest still collected
+PORT3=$((PORT + 2))
+python3 tests/fake/weaviate_server.py "$PORT3" "$T/http-violations" debug-off &
+SERVER3=$!
+sleep 1
+FAKE_WEAVIATE_PORT="$PORT3" ./collect.sh --yes --profile --only weaviate --metrics-interval 5 --output "$T/out10" > /dev/null 2> "$T/stderr10"
+kill "$SERVER3" 2>/dev/null
+B10=$(ls -d "$T"/out10/weaviate-support-bundle-*/ 2>/dev/null | head -1)
+if [ -n "$B10" ]; then
+  grep -q 'DEBUG_ENDPOINTS_ENABLED' "$T/stderr10" && pass "debug endpoints off: preflight says so" || bad "debug endpoints off: no hint"
+  jq -e 'any(.steps[]; .section == "profile" and .status == "unavailable" and (.detail | test("DEBUG_ENDPOINTS_ENABLED")))' "$B10/manifest.json" > /dev/null \
+    && pass "debug endpoints off: step recorded as unavailable" || bad "debug endpoints off: step not recorded"
+  [ -s "$B10/weaviate/meta.json" ] && pass "debug endpoints off: the rest is still collected" || bad "debug endpoints off: rest missing"
+else
+  bad "debug-off run produced no bundle"; tail -20 "$T/stderr10"
+fi
+
+[ ! -s "$T/http-violations" ] && pass "--profile: no debug path outside the allowlist, only GET" || bad "violations: $(cat "$T/http-violations")"
+
+./collect.sh --yes --profile-duration 3 --output "$T/out11" > /dev/null 2> "$T/stderr11"
+[ $? -ne 0 ] && grep -q 'between 5 and 300' "$T/stderr11" && pass "--profile-duration is checked" || bad "--profile-duration not checked"
 
 # The skill's reader on the real bundle, as archive and as folder
 READ=.agents/skills/weaviate-support-bundle/scripts/read-bundle.sh

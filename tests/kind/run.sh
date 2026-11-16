@@ -103,6 +103,7 @@ env:
   PROMETHEUS_MONITORING_ENABLED: true
   GOMEMLIMIT: 800MiB
   AUTHENTICATION_DB_USERS_ENABLED: true
+  DEBUG_ENDPOINTS_ENABLED: true
 EOF
 [ -n "${WEAVIATE_VERSION:-}" ] && printf 'image:\n  tag: "%s"\n' "$WEAVIATE_VERSION" >> "$WORKDIR/values.yaml"
 helm --kube-context "$CTX" install weaviate weaviate --repo "$CHART_REPO" ${CHART_VERSION:+--version "$CHART_VERSION"} \
@@ -190,6 +191,22 @@ if [ -n "$B1" ]; then
   [ -z "$high" ] && pass "healthy cluster has no high red flags" || bad "unexpected high red flags: $high"
   leak_check "$B1" "run 1"
   cp "$B1/SUMMARY.md" "$OUT/1-healthy-SUMMARY.md"
+fi
+
+# ---------------------------------------------------------------------------
+step "Run 1b: --profile on one pod (real debug port)"
+./collect.sh --context "$CTX" --yes --profile --profile-duration 5 --only weaviate --pods weaviate-0 \
+  -o "$OUT/1b-profile" > "$WORKDIR/run1b.out" 2>&1
+rc=$?
+BP=$(ls -d "$OUT"/1b-profile/weaviate-support-bundle-*/ 2>/dev/null | head -n 1)
+[ "$rc" -eq 0 ] && [ -n "$BP" ] && pass "profile run finished" || { bad "profile run failed (exit $rc)"; tail -40 "$WORKDIR/run1b.out"; }
+if [ -n "$BP" ]; then
+  [ "$(step_status "$BP" weaviate-0)" = "ok" ] && pass "profile step ok" || bad "profile step: $(jq -c '[.steps[] | select(.section == "profile")]' "$BP/manifest.json")"
+  for f in heap allocs mutex goroutine cpu fgprof; do
+    gzip -t "$BP/pods/weaviate-0/profiles/$f.pb.gz" 2>/dev/null && pass "real $f profile is complete" || bad "real $f profile missing or cut off"
+  done
+  grep -q '^goroutine ' "$BP/pods/weaviate-0/profiles/goroutine_dump.txt" 2>/dev/null && pass "real goroutine dump" || bad "goroutine dump missing"
+  [ ! -d "$BP/pods/weaviate-1/profiles" ] && pass "--pods limits profiling" || bad "profiled a pod outside --pods"
 fi
 
 # ---------------------------------------------------------------------------

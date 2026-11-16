@@ -37,7 +37,19 @@ for cmd in "kc delete pod x" "kc apply -f x.yaml" "kc exec weaviate-0 -- ls" "kc
            "kc get pods --watch" "kc logs x -f" "kc_raw_get /api/v1/namespaces/x/secrets" \
            "kc_raw_get /api/v1/nodes/n/proxy/../../secrets" \
            "http_get http://127.0.0.1:6060/debug/config $T/out" "http_get http://h:8080/debug/index/rebuild/vector $T/out" \
-           "http_get file:///etc/passwd $T/out"; do
+           "http_get file:///etc/passwd $T/out" \
+           "http_get http://127.0.0.1:41234/debug/pprof/heap $T/out" \
+           "http_get_profile http://127.0.0.1:41234 /debug/index/rebuild/vector $T/out 60" \
+           "http_get_profile http://127.0.0.1:41234 /debug/config/maintenance_mode $T/out 60" \
+           "http_get_profile http://127.0.0.1:41234 /debug/pprof/../index/rebuild/vector $T/out 60" \
+           "http_get_profile http://127.0.0.1:41234 '/debug/pprof/heap?gc=1' $T/out 60" \
+           "http_get_profile http://127.0.0.1:41234 '/debug/pprof/profile?seconds=30&x=1' $T/out 60" \
+           "http_get_profile http://127.0.0.1:41234 '/debug/pprof/profile?seconds=1000' $T/out 60" \
+           "http_get_profile http://127.0.0.1:41234 '/debug/fgprof?seconds=30' $T/out 60" \
+           "http_get_profile http://127.0.0.1:41234 /debug/pprof/trace $T/out 60" \
+           "http_get_profile http://10.0.0.5:6060 /debug/pprof/heap $T/out 60" \
+           "http_get_profile https://weaviate.example.com /debug/pprof/heap $T/out 60" \
+           "http_get_profile http://127.0.0.1:41234@evil.example.com /debug/pprof/heap $T/out 60"; do
   rc=$(run_guarded "$cmd")
   if [ "$rc" = "99" ] && [ ! -s "$CALLS" ]; then pass "blocked: $cmd"; else bad "not blocked (rc=$rc): $cmd"; fi
 done
@@ -46,6 +58,19 @@ for cmd in "kc get pods -n x -o json" "kc logs -n x weaviate-0 --tail=1" "kc ver
            "kc config current-context" "kc_raw_get /api/v1/nodes/node-1/proxy/stats/summary"; do
   rc=$(run_guarded "$cmd")
   if [ "$rc" = "0" ] && grep -q '^kubectl ' "$CALLS"; then pass "allowed: $cmd"; else bad "should be allowed (rc=$rc): $cmd"; fi
+done
+
+# Profiling: only the allow-listed GETs, only through a local tunnel, no credentials.
+for path in /debug/pprof/ /debug/pprof/heap /debug/pprof/allocs /debug/pprof/mutex /debug/pprof/goroutine \
+            '/debug/pprof/goroutine?debug=2' '/debug/pprof/profile?seconds=30' \
+            '/debug/fgprof?seconds=30&ignore=gopark&ignore=GoWrapper'; do
+  rc=$(run_guarded "WEAVIATE_API_KEY=test-key-1234567 http_get_profile http://127.0.0.1:41234 '$path' $T/out 60")
+  if [ "$rc" = "0" ] && grep -q -- '--request GET' "$CALLS" && grep -qF "http://127.0.0.1:41234$path" "$CALLS" \
+     && ! grep -q 'test-key-1234567' "$CALLS" "$CALLS.stdin" 2>/dev/null; then
+    pass "allowed: profiling GET $path (no credentials)"
+  else
+    bad "profiling GET $path (rc=$rc)"
+  fi
 done
 
 # HTTP: GET only, API key never on the command line.

@@ -198,6 +198,8 @@ your API key, and never opens the anonymization map.
 | `--include-helm` | Also read Helm release info: chart version, history, your values (redacted). Needs read access to Secrets. | off |
 | `--helm-release NAME` | Helm release name, if it cannot be found automatically (implies `--include-helm`) | found automatically |
 | `--anonymize` | Replace tenant names and user names with placeholders | off |
+| `--profile` | Also capture Go profiles from each Weaviate pod. See [Profiling](#profiling). | off |
+| `--profile-duration N` | Seconds for the CPU profile and for the fgprof profile, each (5 to 300; implies `--profile`) | `30` |
 | `--metrics-interval N` | Seconds between the two metrics snapshots | `30` |
 | `-o`, `--output DIR` | Where to write the bundle | current folder |
 | `--preflight-only` | Show the preflight table, then stop. Nothing is collected. | off |
@@ -213,6 +215,7 @@ your API key, and never opens the anonymization map.
 ./collect.sh -n weaviate --from 2026-11-01T08:00 --to 2026-11-01T12:00   # the incident window
 ./collect.sh -n weaviate --pods weaviate-1,weaviate-2 --only logs        # logs of two pods only
 ./collect.sh -n weaviate --skip metrics --weaviate-url https://weaviate.example.com
+./collect.sh -n weaviate --profile                            # add Go profiles (support asked for them)
 ```
 
 ### Log time windows
@@ -226,6 +229,39 @@ the ticket.
 For a pod that restarted, the log of the **previous** container is collected
 too (its last 5,000 lines, whatever the window). That is usually where the
 crash reason is.
+
+### Profiling
+
+Run with `--profile` when Weaviate support asks for profiles, usually for
+high CPU or memory use, slow queries, or a cluster that hangs. For each
+Weaviate pod, one pod at a time, the tool captures:
+
+| File in `pods/<pod>/profiles/` | What it shows |
+|---|---|
+| `heap.pb.gz`, `allocs.pb.gz` | Memory in use, and memory allocated since start |
+| `mutex.pb.gz` | Where goroutines wait on locks |
+| `goroutine.pb.gz`, `goroutine_dump.txt` | Every goroutine and where it is (finds hangs) |
+| `cpu.pb.gz`, `fgprof.pb.gz` | Where time goes, over `--profile-duration` seconds each (fgprof includes time spent waiting) |
+
+These are the same profiles, taken in the same order, as the tools
+Weaviate support uses. CPU and fgprof run one after the other, never
+together.
+
+Good to know:
+
+- **It needs Weaviate's debug endpoints.** They are off by default
+  (since Weaviate 1.36.18). Set `DEBUG_ENDPOINTS_ENABLED=true` on the
+  Weaviate container. The preflight tells you if they are off, and the
+  rest of the bundle is still collected. It also needs port-forward.
+- **It adds load while it runs.** The CPU and fgprof profiles take
+  `--profile-duration` seconds each (30 by default), per pod. On a busy
+  cluster, run it when a short extra load is acceptable.
+- **Only profiling paths are read.** The debug port also has endpoints that
+  change state. The tool's safety gate allows only the profiling `GET`
+  requests above, and only for this option.
+- **What profiles contain:** function names, source file names and counters
+  from the Weaviate program. No objects, vectors, tenant names or secrets.
+  Heap profiles of large pods can be large (up to several hundred MB).
 
 ## High-security environments
 

@@ -3,16 +3,23 @@
 
 Serves fixture responses for the GET endpoints the tool reads, requires the
 API key on API calls, and records any non-GET request as a violation.
-Usage: weaviate_server.py <port> <violations-file> [schema-down]
+Usage: weaviate_server.py <port> <violations-file> [schema-down|debug-off]
 With "schema-down", schema and user endpoints return HTTP 500, like a
-cluster that lost Raft quorum.
+cluster that lost Raft quorum. With "debug-off", the debug port answers 404
+to everything, like Weaviate with DEBUG_ENDPOINTS_ENABLED=false.
+The fake kubectl forwards every port here, so this server is also the debug
+port (6060). Each /debug request is appended to $FAKE_DEBUG_LOG, and any
+/debug path other than the profiling ones is recorded as a violation.
 """
-import json, sys
+import gzip, json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = int(sys.argv[1])
 VIOLATIONS = sys.argv[2]
 SCHEMA_DOWN = len(sys.argv) > 3 and sys.argv[3] == "schema-down"
+DEBUG_OFF = len(sys.argv) > 3 and sys.argv[3] == "debug-off"
+DEBUG_LOG = os.environ.get("FAKE_DEBUG_LOG", "/dev/null")
+PROFILES = {"/debug/pprof/heap", "/debug/pprof/allocs", "/debug/pprof/mutex", "/debug/pprof/goroutine"}
 API_KEY = "e2e-fixture-apikey-9001"
 
 def shard(cls, name, n, status="READY", queue=0):
@@ -81,8 +88,27 @@ class H(BaseHTTPRequestHandler):
             f.write(f"{self.command} {self.path}\n")
         self.send_response(405); self.end_headers()
     do_POST = do_PUT = do_PATCH = do_DELETE = _bad
+    def _debug(self, p):
+        with open(DEBUG_LOG, "a") as f:
+            f.write(p + "\n")
+        timed = p.startswith("/debug/pprof/profile?seconds=") or (p.startswith("/debug/fgprof?seconds=") and p.endswith("&ignore=gopark&ignore=GoWrapper"))
+        if not (p == "/debug/pprof/" or p in PROFILES or p == "/debug/pprof/goroutine?debug=2" or timed):
+            with open(VIOLATIONS, "a") as f:
+                f.write(f"debug path {p}\n")
+            self.send_response(404); self.end_headers(); return
+        if DEBUG_OFF:
+            self.send_response(404); self.end_headers(); return
+        if p == "/debug/pprof/":
+            body, ctype = b"<html>pprof index</html>", "text/html"
+        elif p.endswith("debug=2"):
+            body, ctype = b"goroutine 1 [running]:\nmain.main()\n\t/go/src/weaviate/main.go:42 +0x1d\n", "text/plain"
+        else:
+            body, ctype = gzip.compress(b"fake pprof " + p.encode()), "application/octet-stream"
+        self.send_response(200); self.send_header("Content-Type", ctype); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
         p = self.path
+        if p.startswith("/debug"):
+            self._debug(p); return
         if p == "/metrics":
             H.calls += 1
             body = (METRICS % (1000 * H.calls, 100 * H.calls)).encode()

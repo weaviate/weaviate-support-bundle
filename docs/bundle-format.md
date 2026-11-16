@@ -48,6 +48,10 @@ weaviate-support-bundle-<YYYYMMDD-HHMMSS>/
     ├── status.json            this pod from kubernetes/pods.json
     ├── health.json            /v1/.well-known/live and /ready (Weaviate pods)
     ├── metrics.json           key metrics, two snapshots (Weaviate pods, if enabled)
+    ├── profiles/              only with --profile (Weaviate pods), Go pprof format:
+    │   ├── heap.pb.gz, allocs.pb.gz, mutex.pb.gz, goroutine.pb.gz
+    │   ├── goroutine_dump.txt   /debug/pprof/goroutine?debug=2
+    │   └── cpu.pb.gz, fgprof.pb.gz   profile_duration_seconds each, taken one after the other
     └── logs/
         ├── <container>.log            current container, requested window
         └── <container>.previous.log   previous container after a restart (last 5,000 lines)
@@ -74,13 +78,19 @@ server, so their fields follow the
           "log_window": "last 24h", "log_since": "24h", "log_from": null, "log_to": null,
           "previous_log_lines": 5000, "max_log_mb_per_container": 100,
           "metrics_interval_seconds": 30, "connect_mode": "port-forward",
-          "anonymized": false, "include_helm": false},
+          "anonymized": false, "include_helm": false,
+          "profile": false, "profile_duration_seconds": null},
   "steps": [{"section": "kubernetes", "name": "pods", "status": "ok", "detail": "3 Weaviate, 0 module"}],
   "logs": [{"pod": "weaviate-0", "container": "weaviate", "kind": "current", "file": "pods/weaviate-0/logs/weaviate.log",
             "lines": 1234, "first": "2026-11-04T14:30:01.123Z", "last": "2026-11-05T14:29:59.999Z", "truncated": false}],
   "files": [{"path": "SUMMARY.md", "bytes": 5120}]
 }
 ```
+
+Profiles are written as Weaviate's debug port returns them; read them with
+`go tool pprof` (for example `go tool pprof -http=: cpu.pb.gz`). A profile that
+was cut off during download is removed, never kept half-written. Steps of
+the profiles have `"section": "profile"`, one per pod.
 
 Step `status` is one of: `ok`, `skipped` (not applicable or turned off),
 `forbidden` (no permission), `not_found` (not available on this cluster or

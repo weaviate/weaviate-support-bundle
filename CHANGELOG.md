@@ -3,6 +3,24 @@
 All notable changes are listed here. Versions follow
 [semantic versioning](https://semver.org); see `docs/releasing.md`.
 
+## Unreleased
+
+- New option `--profile`: captures Go profiles from each Weaviate pod, one
+  pod at a time, the same way Weaviate support's own tools do: heap,
+  allocs, mutex and goroutine profiles, a goroutine dump
+  (`?debug=2`), then a CPU profile and an fgprof profile, one after the
+  other. Files go to `pods/<pod>/profiles/`. Off by default.
+- New option `--profile-duration N` (default 30 seconds) for the CPU and
+  fgprof profiles.
+- The read-only gate allows only these profiling `GET` paths on Weaviate's
+  debug port, only through a local port-forward, and only with `--profile`.
+- The preflight shows whether profiling is possible (for example when
+  `DEBUG_ENDPOINTS_ENABLED` is off) and how long it takes.
+- `manifest.json`: new fields `run.profile` and `run.profile_duration_seconds`;
+  new step section `profile`.
+
+New files and fields only; no change to the bundle schema version (1).
+
 ## 1.1.0 (2026-11-06)
 
 - Agent skill (`.agents/skills/weaviate-support-bundle`, open Agent Skills

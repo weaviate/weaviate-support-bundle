@@ -328,6 +328,13 @@ show_preflight() {
     *)         _row "Helm" unavailable "not available → will skip" ;;
   esac
 
+  case "$PF_PROFILE" in
+    off)       _row "Profiling" off "off (add --profile)" ;;
+    ok)        _row "Profiling" ok "$(_count_words "$SEL_WEAVIATE_PODS") pod(s), one at a time, about $(profile_seconds_per_pod)s each: heap, allocs, mutex, goroutine, goroutine dump, CPU then fgprof (${PROFILE_DURATION}s each). Adds CPU load while it runs." ;;
+    forbidden) _row "Profiling" forbidden "needs port-forward → will skip" ;;
+    *)         _row "Profiling" unavailable "${PROFILE_ERROR:-not available} → will skip" ;;
+  esac
+
   if [ "$ANONYMIZE" = "1" ]; then _row "Anonymize" ok "tenant and user names replaced"
   else _row "Anonymize" off "off (add --anonymize)"; fi
 

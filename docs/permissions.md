@@ -104,5 +104,19 @@ every file in the bundle.
 | `/v1/.well-known/live`, `/v1/.well-known/ready` | Per-pod health |
 | `:2112/metrics` | Prometheus metrics, if enabled |
 
-The tool never calls Weaviate's debug port (6060), because some of its
-endpoints change state. The safety gate blocks it.
+Weaviate's debug port (`GO_PROFILING_PORT`, 6060 by default) also has
+endpoints that change state. Without `--profile` the tool never calls it,
+and the safety gate blocks it. With `--profile`, the gate allows only these
+`GET` requests, only through a port-forward to one pod at a time, and
+without credentials:
+
+| Debug port path | Why |
+|---|---|
+| `/debug/pprof/` | Check that debug endpoints are on (preflight) |
+| `/debug/pprof/heap`, `/allocs`, `/mutex`, `/goroutine` | Memory, allocation, lock-wait and goroutine profiles |
+| `/debug/pprof/goroutine?debug=2` | Goroutine dump (text) |
+| `/debug/pprof/profile?seconds=N` | CPU profile for N seconds |
+| `/debug/fgprof?seconds=N&ignore=gopark&ignore=GoWrapper` | fgprof (CPU and waiting time) for N seconds |
+
+They need `DEBUG_ENDPOINTS_ENABLED=true` in Weaviate, and the
+port-forward permission above. No extra Kubernetes permission.

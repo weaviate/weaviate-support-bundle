@@ -17,6 +17,7 @@ write_manifest() {
     --argjson prev "$PREVIOUS_LOG_LINES" --argjson interval "$METRICS_INTERVAL" --argjson maxlog "$MAX_LOG_MB" \
     --arg connect "$CONNECT_MODE" --argjson anon "$([ "$ANONYMIZE" = 1 ] && echo true || echo false)" \
     --argjson helm "$([ "$INCLUDE_HELM" = 1 ] && echo true || echo false)" \
+    --argjson profile "$([ "${PROFILE:-0}" = 1 ] && echo true || echo false)" --argjson pdur "${PROFILE_DURATION:-30}" \
     --slurpfile steps "$WORK/steps.json" --slurpfile logs "$WORK/logs-index.json" \
     'def words: split(" ") | map(select(length > 0));
      def opt: if . == "" then null else . end;
@@ -29,7 +30,8 @@ write_manifest() {
             log_window: $window, log_since: (if $from == "" then $since else null end),
             log_from: ($from | opt), log_to: ($to | opt), previous_log_lines: $prev,
             max_log_mb_per_container: $maxlog, metrics_interval_seconds: $interval,
-            connect_mode: $connect, anonymized: $anon, include_helm: $helm},
+            connect_mode: $connect, anonymized: $anon, include_helm: $helm,
+            profile: $profile, profile_duration_seconds: (if $profile then $pdur else null end)},
       steps: $steps[0],
       logs: $logs[0],
       files: []}' > "$STAGE/manifest.json"

@@ -51,4 +51,10 @@ Behaviour that is easy to misread in a bundle.
 
 - The REST API is on 8080 by default and metrics on 2112 (when
   `PROMETHEUS_MONITORING_ENABLED=true`).
-- The debug port (6060) is off by default and the tool never calls it.
+- The debug port (`GO_PROFILING_PORT`, 6060 by default) serves requests only
+  when `DEBUG_ENDPOINTS_ENABLED=true` (off by default since 1.36.18); with it
+  off, every request gets 404. The tool calls it only with `--profile`, and
+  then only the profiling GETs listed in `docs/permissions.md`.
+- Profiles are in `pods/<pod>/profiles/` (Go pprof format). Read them with
+  `go tool pprof`; `goroutine_dump.txt` is plain text and shows where every
+  goroutine is stuck.
